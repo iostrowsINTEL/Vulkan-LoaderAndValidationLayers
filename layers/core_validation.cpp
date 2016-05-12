@@ -8492,6 +8492,8 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateRenderPass(VkDevice device, const VkRenderP
             MT_PASS_ATTACHMENT_INFO pass_info;
             pass_info.load_op = desc.loadOp;
             pass_info.store_op = desc.storeOp;
+            pass_info.stencil_load_op = desc.stencilLoadOp;
+            pass_info.stencil_store_op = desc.stencilStoreOp;
             pass_info.attachment = i;
             render_pass->attachments.push_back(pass_info);
         }
@@ -8729,8 +8731,8 @@ static bool VerifyRenderAreaBounds(const layer_data *my_data, const VkRenderPass
     return skip_call;
 }
 
-VKAPI_ATTR void VKAPI_CALL
-CmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin, VkSubpassContents contents) {
+VKAPI_ATTR void VKAPI_CALL CmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin,
+                                              VkSubpassContents contents) {
     bool skipCall = false;
     layer_data *dev_data = get_my_data_ptr(get_dispatch_key(commandBuffer), layer_data_map);
     std::unique_lock<std::mutex> lock(global_lock);
@@ -8740,12 +8742,13 @@ CmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *p
 #if MTMERGE
             auto pass_data = dev_data->renderPassMap.find(pRenderPassBegin->renderPass);
             if (pass_data != dev_data->renderPassMap.end()) {
-                RENDER_PASS_NODE* pRPNode = pass_data->second;
+                RENDER_PASS_NODE *pRPNode = pass_data->second;
                 pRPNode->fb = pRenderPassBegin->framebuffer;
                 auto cb_data = dev_data->commandBufferMap.find(commandBuffer);
                 for (size_t i = 0; i < pRPNode->attachments.size(); ++i) {
                     MT_FB_ATTACHMENT_INFO &fb_info = dev_data->frameBufferMap[pRPNode->fb].attachments[i];
-                    if (pRPNode->attachments[i].load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+                    if ((pRPNode->attachments[i].load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) ||
+                        (pRPNode->attachments[i].stencil_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR)) {
                         if (cb_data != dev_data->commandBufferMap.end()) {
                             std::function<bool()> function = [=]() {
                                 set_memory_valid(dev_data, fb_info.mem, true, fb_info.image);
@@ -8756,13 +8759,14 @@ CmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *p
                         VkImageLayout &attachment_layout = pRPNode->attachment_first_layout[pRPNode->attachments[i].attachment];
                         if (attachment_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL ||
                             attachment_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                            skipCall |=
-                                log_msg(dev_data->report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT,
-                                        VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT, (uint64_t)(pRenderPassBegin->renderPass), __LINE__,
-                                        MEMTRACK_INVALID_LAYOUT, "MEM", "Cannot clear attachment %d with invalid first layout %d.",
-                                        pRPNode->attachments[i].attachment, attachment_layout);
+                            skipCall |= log_msg(dev_data->report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT,
+                                                VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT,
+                                                (uint64_t)(pRenderPassBegin->renderPass), __LINE__, MEMTRACK_INVALID_LAYOUT, "MEM",
+                                                "Cannot clear attachment %d with invalid first layout %d.",
+                                                pRPNode->attachments[i].attachment, attachment_layout);
                         }
-                    } else if (pRPNode->attachments[i].load_op == VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
+                    } else if ((pRPNode->attachments[i].load_op == VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+                               (pRPNode->attachments[i].stencil_load_op == VK_ATTACHMENT_LOAD_OP_DONT_CARE)) {
                         if (cb_data != dev_data->commandBufferMap.end()) {
                             std::function<bool()> function = [=]() {
                                 set_memory_valid(dev_data, fb_info.mem, false, fb_info.image);
@@ -8770,7 +8774,8 @@ CmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *p
                             };
                             cb_data->second->validate_functions.push_back(function);
                         }
-                    } else if (pRPNode->attachments[i].load_op == VK_ATTACHMENT_LOAD_OP_LOAD) {
+                    } else if ((pRPNode->attachments[i].load_op == VK_ATTACHMENT_LOAD_OP_LOAD) ||
+                               (pRPNode->attachments[i].stencil_load_op == VK_ATTACHMENT_LOAD_OP_LOAD)) {
                         if (cb_data != dev_data->commandBufferMap.end()) {
                             std::function<bool()> function = [=]() {
                                 return validate_memory_is_valid(dev_data, fb_info.mem, "vkCmdBeginRenderPass()", fb_info.image);
@@ -8850,7 +8855,8 @@ VKAPI_ATTR void VKAPI_CALL CmdEndRenderPass(VkCommandBuffer commandBuffer) {
         if (pRPNode) {
             for (size_t i = 0; i < pRPNode->attachments.size(); ++i) {
                 MT_FB_ATTACHMENT_INFO &fb_info = dev_data->frameBufferMap[pRPNode->fb].attachments[i];
-                if (pRPNode->attachments[i].store_op == VK_ATTACHMENT_STORE_OP_STORE) {
+                if ((pRPNode->attachments[i].store_op == VK_ATTACHMENT_STORE_OP_STORE) ||
+                    (pRPNode->attachments[i].stencil_store_op == VK_ATTACHMENT_STORE_OP_STORE)) {
                     if (cb_data != dev_data->commandBufferMap.end()) {
                         std::function<bool()> function = [=]() {
                             set_memory_valid(dev_data, fb_info.mem, true, fb_info.image);
@@ -8858,7 +8864,8 @@ VKAPI_ATTR void VKAPI_CALL CmdEndRenderPass(VkCommandBuffer commandBuffer) {
                         };
                         cb_data->second->validate_functions.push_back(function);
                     }
-                } else if (pRPNode->attachments[i].store_op == VK_ATTACHMENT_STORE_OP_DONT_CARE) {
+                } else if ((pRPNode->attachments[i].store_op == VK_ATTACHMENT_STORE_OP_DONT_CARE) ||
+                           (pRPNode->attachments[i].stencil_store_op == VK_ATTACHMENT_STORE_OP_DONT_CARE)) {
                     if (cb_data != dev_data->commandBufferMap.end()) {
                         std::function<bool()> function = [=]() {
                             set_memory_valid(dev_data, fb_info.mem, false, fb_info.image);

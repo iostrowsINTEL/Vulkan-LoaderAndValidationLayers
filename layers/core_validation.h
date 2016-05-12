@@ -101,6 +101,8 @@ struct MT_PASS_ATTACHMENT_INFO {
     uint32_t attachment;
     VkAttachmentLoadOp load_op;
     VkAttachmentStoreOp store_op;
+    VkAttachmentLoadOp stencil_load_op;
+    VkAttachmentStoreOp stencil_store_op;
 };
 
 struct MT_DESCRIPTOR_SET_INFO {
