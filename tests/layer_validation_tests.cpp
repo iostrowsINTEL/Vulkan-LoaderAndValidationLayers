@@ -2132,6 +2132,86 @@ TEST_F(VkLayerTest, MapMemWithoutHostVisibleBit) {
 
     vkDestroyImage(m_device->device(), image, NULL);
 }
+TEST_F(VkLayerTest, TonyTestcase) {
+    VkResult err;
+    m_errorMonitor->SetDesiredFailureMsg(
+        VK_DEBUG_REPORT_ERROR_BIT_EXT,
+        "DECOY");
+    ASSERT_NO_FATAL_FAILURE(InitState());
+
+    uint32_t qfi = 0;
+    VkBufferCreateInfo buffCI = {};
+    buffCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffCI.size = 1024;
+    buffCI.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    buffCI.queueFamilyIndexCount = 1;
+    buffCI.pQueueFamilyIndices = &qfi;
+
+    VkBuffer dyub;
+    err = vkCreateBuffer(m_device->device(), &buffCI, NULL, &dyub);
+    ASSERT_VK_SUCCESS(err);
+    // Allocate memory and bind to buffer so we can make it to the appropriate
+    // error
+    VkMemoryAllocateInfo mem_alloc = {};
+    mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mem_alloc.pNext = NULL;
+    mem_alloc.allocationSize = 1024;
+    mem_alloc.memoryTypeIndex = 0;
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(m_device->device(), dyub, &memReqs);
+    bool pass = m_device->phy().set_memory_type(memReqs.memoryTypeBits, &mem_alloc,
+                                           0);
+    if (!pass) {
+        vkDestroyBuffer(m_device->device(), dyub, NULL);
+        return;
+    }
+
+    VkDeviceMemory mem;
+    err = vkAllocateMemory(m_device->device(), &mem_alloc, NULL, &mem);
+    ASSERT_VK_SUCCESS(err);
+    err = vkBindBufferMemory(m_device->device(), dyub, mem, 0);
+    ASSERT_VK_SUCCESS(err);
+
+    VkFenceCreateInfo fci = {};
+    VkFence fence;
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fci.pNext = NULL;
+    fci.flags = 0;
+    vkCreateFence(m_device->device(), &fci, NULL, &fence);
+    vkResetFences(m_device->device(), 1, &fence);
+    VkBindSparseInfo bindInfo = {};
+    VkSparseBufferMemoryBindInfo bbinfo = {};
+    VkSparseMemoryBind bind = {};
+
+    bindInfo.sType = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO;
+    bindInfo.pNext = NULL;
+    bindInfo.waitSemaphoreCount = 0;
+    bindInfo.pWaitSemaphores = NULL;
+    bindInfo.bufferBindCount = 1;
+    bindInfo.pBufferBinds = NULL;
+    bindInfo.imageOpaqueBindCount = 0;
+    bindInfo.pImageOpaqueBinds = NULL;
+    bindInfo.imageBindCount = 0;
+    bindInfo.pImageBinds = NULL;
+    bindInfo.signalSemaphoreCount = 0;
+    bindInfo.pSignalSemaphores = NULL;
+    bindInfo.pBufferBinds = &bbinfo;
+
+
+    bbinfo.bindCount = 1;
+    bbinfo.buffer = dyub;
+    bbinfo.pBinds = &bind;
+
+    bind.size = 1024;
+    bind.resourceOffset = 0;
+    bind.memory = mem;
+    bind.flags = 0;
+    bind.memoryOffset = 0;
+
+    vkQueueBindSparse(m_device->m_queue, 1, &bindInfo, fence);
+    m_errorMonitor->DumpFailureMsgs();// Fence is already in use by another submission
+}
 
 TEST_F(VkLayerTest, RebindMemory) {
     VkResult err;
